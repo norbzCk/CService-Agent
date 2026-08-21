@@ -1,0 +1,15 @@
+#Local enviroments & Secrets
+.env
+
+# Dependencies andd Virtual Environments
+venv/
+__pycache__/
+*.pyc
+node_modules/
+
+# AI Model Weights & Cache
+models/
+.cache/ 
+
+# IDEs & System Files
+.vscode/
