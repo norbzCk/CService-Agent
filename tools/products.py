@@ -1,49 +1,24 @@
-from typing import Any
+from typing import Any, Literal
 
-DEMO_PRODUCTS = [
-    {
-        "id": 1,
-        "name": "Leather Belt",
-        "description": "Classic genuine leather belt.",
-        "price": 3500,
-        "category": "Fashion",
-        "seller": "Demo Fashion Store",
-        "stock": 12,
-    },
-    {
-        "id": 2,
-        "name": "Casual Belt",
-        "description": "Adjustable casual belt for everyday use.",
-        "price": 2800,
-        "category": "Fashion",
-        "seller": "Demo Fashion Store",
-        "stock": 25,
-    },
-    {
-        "id": 3,
-        "name": "Samsung Galaxy A55",
-        "description": "Samsung Galaxy A55 smartphone.",
-        "price": 850000,
-        "category": "Phones",
-        "seller": "Demo Electronics",
-        "stock": 7,
-    },
-    {
-        "id": 4,
-        "name": "Cement 50kg",
-        "description": "50kg bag of construction cement.",
-        "price": 18500,
-        "category": "Construction",
-        "seller": "Demo Building Supplies",
-        "stock": 100,
-    },
-]
+from database.connection import run_query
+
+VALID_SORT = {
+    "relevance": "p.rating_avg DESC, p.id DESC",
+    "price_low": "p.price ASC, p.id DESC",
+    "price_high": "p.price DESC, p.id DESC",
+    "rating": "p.rating_avg DESC, p.rating_count DESC",
+    "newest": "p.id DESC",
+}
 
 
 def search_products(
     query: str,
+    min_price: float | None = None,
     max_price: float | None = None,
     category: str | None = None,
+    in_stock_only: bool = True,
+    sort_by: Literal["relevance", "price_low", "price_high", "rating", "newest"] = "relevance",
+    limit: int = 8,
 ) -> dict[str, Any]:
     """
     Search products currently listed on Soko-Link.
@@ -51,30 +26,39 @@ def search_products(
     - Find a product
     - Search for a product
     - Check whether a product is available
-    - Find products within a maximum price
+    - Find products within a price range
     - Find products in a specific category
+    - Compare or browse products by price or rating
 
     Do not use this tool for:
     - Order status
     - Delivery status
+    - Payment status
     - Account information
     - Seller verification
 
     Args:
         query:
-            The product name or keywords the customer is
-            looking for.
-
+            The product name or keywords the customer is looking for.
+        min_price:
+            Optional minimum price the customer wants to pay.
         max_price:
             Optional maximum price the customer wants to pay.
-
         category:
-            Optional product category.
+            Optional product category to filter by.
+        in_stock_only:
+            If true (default), only return products currently in stock.
+            Set false if the customer explicitly asks to see out-of-stock items.
+        sort_by:
+            How to order results: "relevance" (default), "price_low",
+            "price_high", "rating", or "newest".
+        limit:
+            Max results to return (default 8, capped at 20).
 
     Returns:
         A structured result containing matching products.
     """
-    search_term = query.strip().lower()
+    search_term = query.strip()
 
     if not search_term:
         return {
@@ -83,42 +67,65 @@ def search_products(
             "products": [],
         }
 
-    results = []
+    if min_price is not None and max_price is not None and min_price > max_price:
+        min_price, max_price = max_price, min_price
 
-    for product in DEMO_PRODUCTS:
-        searchable_text = " ".join(
-            [
-                product["name"],
-                product["description"],
-                product["category"],
-            ]
-        ).lower()
+    limit = max(1, min(limit, 20))
+    order_clause = VALID_SORT.get(sort_by, VALID_SORT["relevance"])
 
-        if search_term not in searchable_text:
-            continue
+    conditions = [
+        "p.is_active = TRUE",
+        "(p.name ILIKE %(term)s OR p.description ILIKE %(term)s OR p.category ILIKE %(term)s)",
+    ]
+    params: dict[str, Any] = {"term": f"%{search_term}%", "limit": limit}
 
-        if max_price is not None and product["price"] > max_price:
-            continue
+    if min_price is not None:
+        conditions.append("p.price >= %(min_price)s")
+        params["min_price"] = min_price
 
-        if (
-            category is not None
-            and product["category"].lower() != category.strip().lower()
-        ):
-            continue
+    if max_price is not None:
+        conditions.append("p.price <= %(max_price)s")
+        params["max_price"] = max_price
 
-        results.append(product)
+    if category is not None and category.strip():
+        conditions.append("p.category ILIKE %(category)s")
+        params["category"] = category.strip()
+
+    if in_stock_only:
+        conditions.append("p.stock > 0")
+
+    sql = f"""
+        SELECT p.id, p.name, p.description, p.price, p.category, p.stock,
+               p.rating_avg, p.rating_count,
+               b.business_name AS seller
+        FROM products p
+        LEFT JOIN business_users b ON b.id = p.seller_id
+        WHERE {' AND '.join(conditions)}
+        ORDER BY {order_clause}
+        LIMIT %(limit)s
+    """
+
+    try:
+        results = run_query(sql, params)
+    except Exception:
+        return {
+            "success": False,
+            "message": "I couldn't search products right now due to a system issue. Please try again shortly.",
+            "products": [],
+        }
 
     if not results:
         return {
             "success": True,
             "found": False,
-            "message": f"No products matching '{query}' were found.",
+            "message": f"No products matching '{query}' were found with those filters.",
             "products": [],
         }
 
     return {
         "success": True,
         "found": True,
+        "count": len(results),
         "products": results,
     }
 
@@ -140,18 +147,35 @@ def get_product(
         A structured result containing the product,
         or a not-found result.
     """
-    for product in DEMO_PRODUCTS:
-        if product["id"] == product_id:
-            return {
-                "success": True,
-                "found": True,
-                "product": product,
-            }
+    try:
+        rows = run_query(
+            """
+            SELECT p.id, p.name, p.description, p.price, p.category, p.stock,
+                   p.rating_avg, p.rating_count,
+                   b.business_name AS seller
+            FROM products p
+            LEFT JOIN business_users b ON b.id = p.seller_id
+            WHERE p.id = %(product_id)s AND p.is_active = TRUE
+            """,
+            {"product_id": product_id},
+        )
+    except Exception:
+        return {
+            "success": False,
+            "message": "I couldn't look up that product right now due to a system issue. Please try again shortly.",
+            "product": None,
+        }
+
+    if not rows:
+        return {
+            "success": True,
+            "found": False,
+            "message": "Product not found.",
+            "product": None,
+        }
 
     return {
         "success": True,
-        "found": False,
-        "message": "Product not found.",
-        "product": None,
+        "found": True,
+        "product": rows[0],
     }
-
