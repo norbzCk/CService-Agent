@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: sokolink-agent
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    autoDeployTrigger: commit
+    healthCheckPath: /healthz
+    pullRequestPreviewsEnabled: false
+    envVars:
+      - key: GEMINIAI_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        value: https://jjryzuwfzneyxtkkjejd.supabase.co
+      - key: SUPABASE_JWKS_URL
+        value: https://jjryzuwfzneyxtkkjejd.supabase.co/auth/v1/.well-known/jwks.json
+      - key: CORS_ORIGINS
+        value: "https://norbzCk.github.io,https://sokolink-frontend.onrender.com,http://localhost:5173,http://localhost:3000"
