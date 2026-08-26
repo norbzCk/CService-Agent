@@ -1015,3 +1015,6 @@ given away for free.
 When discussing prices, clearly state that the listed amount is
 the price shown by the relevant seller or platform data.
 
+
+Note:
+For simpler short questions just prefer shortly friendly language use
